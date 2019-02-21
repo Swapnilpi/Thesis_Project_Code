@@ -1,0 +1,1318 @@
+library(dplyr)
+library(ggplot2)
+library(timeSeries)
+library(zoo)
+library(tseries)
+library(forecast)
+library(tstools)
+library(quantmod)
+library(RSNNS)
+library(stringr)
+library(quantmod)
+library(sarima)
+library(TSPred)
+
+#Setting the seed
+set.seed(660)
+
+#importing whole data 
+CountryGlobalData  <- read.csv(file = "GlobalLandTemperaturesByCountry.csv" , header = TRUE , sep = ",")
+View(CountryGlobalData)
+
+NewContries <- subset(CountryGlobalData$Country , Country = Zimbabwe,Qatar,Ireland,Burundi,Afghanistan )# select = c(Zimbabwe,Qatar,Ireland,Burundi,Afghanistan))
+NewCountries <- dplyr::filter(CountryGlobalData , Country =="United.States")
+
+##making the date column into a single format as dates are in two formats
+Globaldate <- as.Date(CountryGlobalData$dt,format="%Y-%m-%d") 
+Global1date <- as.Date(CountryGlobalData$dt,format="%m/%d/%Y") 
+Globaldate[is.na(Globaldate)] <- Global1date[!is.na(Global1date)] 
+CountryGlobalData$dt <- Globaldate
+names(CountryGlobalData)
+
+#Sorting the data form 1970-2010
+Countries_list <- c("Zimbabwe","Qatar","Ireland","Burundi","Afghanistan","United.States")
+Countries_list_data <- CountryGlobalData[CountryGlobalData$Country %in% Countries_list,]
+View(Countries_list_data)
+
+sort <- Countries_list_data[order(Countries_list_data$dt),]
+sort$dt <- as.Date(sort$dt)
+View(sort)
+Countrydate <- c(sort[11116:14067,1])
+View(listdate)
+CountrySorteddata <- sort[sort$dt %in% Countrydate,]
+
+#changing the names of countries having special characters and spaces in their name
+Country.names <- gsub(" ", "_", names(CountryGlobalData$Country))
+CountryGlobalData$Country <- str_replace_all(CountryGlobalData$Country, c(" " = "." , "," = "" ))
+
+#####Starting the SARIMA MODELLING AND EDA ###############
+
+# 1. USA-Sarima
+
+#Getting the data from main data
+United_States <- dplyr::filter(CountryGlobalData , Country =="United.States")
+View(United_States)
+subs
+##checking the missing values
+colSums(is.na(United_States))
+
+##making the date column into a single format as dates are in two formats
+USdate <- as.Date(United_States$dt,format="%Y-%m-%d") # Produces NA when format is not "%m/%d/%Y"
+US2date <- as.Date(United_States$dt,format="%m/%d/%Y") # Produces NA when format is not "%d.%m.%Y"
+USdate[is.na(USdate)] <- US2date[!is.na(US2date)] # Combine both while keeping their ranks
+United_States$dt <- USdate
+
+##Checking whether the date class is changed or not
+str(United_States)
+
+#Removing the unwanted columns
+United_States <- subset( United_States, select = -c( AverageTemperatureUncertainty , Country) )
+
+#COnverting the dataframe to Ts object
+UnitedStates.ts <- ts(United_States[,"AverageTemperature"] , c(1768 , 9) , c(2013 , 9), 12)  
+  
+
+#Checking whether the dataframe is converted to time series object
+class(UnitedStates.ts)
+
+# Plotting the graph before interpolating the missing values 
+autoplot(UnitedStates.ts)
+
+#Doing the interpolation using structTS function
+UnitedStates.ts <- na.interp(UnitedStates.ts)
+
+# Plotting the graph after interpolating the missing values 
+autoplot(UnitedStates.ts)
+
+##Spliting the data between Train and Test Set
+United_StatesTrain <- window(UnitedStates.ts , c(1768 , 9) , c(2010,12 )  )
+
+United_StatesTest <- window(UnitedStates.ts , c(2010 , 1) , c(2013,9))  
+
+###Starting with Train set i.e United_StatesTrain
+##  Exploratory Data Analysis
+
+## 1 . visually inspecting the distribution of time series values with Kernal density estimate and normal density funtion to a plot
+gghistogram(United_StatesTrain , add.normal=TRUE, add.kde=TRUE)
+
+
+## 2. Using the decompose function to break the series into seasonal, trend, and irregular components
+UnitedStatesTrain_decomposed <- decompose(United_StatesTrain)
+plot(UnitedStatesTrain_decomposed)
+
+## 3.Checking the seasonality
+nsdiffs(United_StatesTrain)
+ggseasonplot(United_StatesTrain)
+ggseasonplot(United_StatesTrain,polar=TRUE) ## Looks like both seasonality and cyclicity is present
+ggsubseriesplot(United_StatesTrain)
+
+## Months with higher Seasonal coe. are November and October ,
+## Months with lower seasonal coe. are July and June.
+
+## 3. Exploring the structure of Decomposed object
+US_seasonal_coef <- data.frame(UnitedStatesTrain_decomposed$figure)
+US_seasonal_coef <- cbind(US_seasonal_coef, seq(1:12))
+US_seasonal_coef[order(-US_seasonal_coef [,1]), ]
+
+
+## 4. Checking the Stationarity with KPSS Test , ADF Test 
+kpss.test(United_StatesTrain)
+adf.test(United_StatesTrain)  
+
+
+## 5. Creating the diff Time series using the diff function to make data Stationary on mean(remove trend)
+UnitedStates_series_differenced <- diff(United_StatesTrain)
+kpss.test(UnitedStates_series_differenced)
+adf.test(UnitedStates_series_differenced)
+
+
+## 6. Plotting the Differenced Series
+plot(UnitedStates_series_differenced)
+
+## 7. Exploring the Auto-Correlation of the differenced Series
+Acf(UnitedStates_series_differenced)
+Pacf(UnitedStates_series_differenced)
+
+## 8. Using log Transfored dtaa to make the data stationary on variance
+UnitedStates_variance <- log10(United_StatesTrain)
+plot(UnitedStates_variance )   
+
+## 9. Again taking diff on the log transformed data to make it staionary on mean and variance
+UnitedStates_diff_varia <- diff(UnitedStates_variance)
+plot(UnitedStates_diff_varia)
+
+## 10. Again Plotting the ACF and PACF to identify potential AR and MA
+Acf(UnitedStates_diff_varia)
+Pacf(UnitedStates_diff_varia)
+
+################End of Eploratory Data Analysis########
+
+#######Modelling#########
+
+#############Starting of United States ####################
+#United States
+##Starting of Modelling
+
+UnitedStates_Sarima <- auto.arima( United_StatesTrain , test = "kpss" , trace = TRUE , ic = "bic",stepwise=FALSE, approximation=FALSE) 
+
+United_StatesnewSarima <- sarima(United_StatesTrain , 1,0,1,2,1,0,12)
+
+Unitedstatesforenew <- sarima.f(United_StatesTrain , 33 , 1,0,1,2,1,0,12)
+
+plot(United_StatesnewSarima)
+
+print(UnitedStates_Sarima)
+plot.ts(UnitedStates_Sarima$residuals)  
+##Box test for residuals
+Box.test(UnitedStates_Sarima$residuals , type = "Ljung-Box" , lag = 20)    
+  
+##using forecast function forecasting the next values
+UnitedSTates.forecast <- forecast(UnitedStates_Sarima , h = 60)
+United_Statesforetemp <- UnitedSTates.forecast$mean
+
+##Testing with the test set and forecasted 
+plot(UnitedSTates.forecast, United_StatesTest)
+plot(United_StatesTest)
+
+plot(UnitedSTates.forecast , xlab = "Years" , ylab = "Average Temperature")
+
+plotarimapred(United_StatesTest , UnitedStates_Sarima , xlim = c(2011,2013), xlab = "Test Years" , main = "Seasonal ARIMA for UnitedStates on Test Set" , ylab = "LandSurface temperature")
+accuracy(UnitedSTates.forecast, United_StatesTest)
+
+##Getting the output
+USDATA <-CountrySorteddata[CountrySorteddata$Country == "United.States",]
+
+US_country <- matrix(USDATA$AverageTemperature,ncol = 12,byrow = T)
+US_country
+USavg_country <- data.frame(year = 1970:2010,temp = rowMeans(US_country[-c(61:63),], na.rm = FALSE, dims = 1))
+
+US_prediction <- matrix(as.matrix(United_Statesforetemp),ncol = 12,byrow = T)
+
+USavg_predict_country <- data.frame(year = 2011:2015,temp = rowMeans(US_prediction, na.rm = FALSE, dims = 1))
+
+US_data_frame <- rbind(USavg_country,USavg_predict_country)
+View(US_data_frame)
+US_data_frame$lag<- Hmisc::Lag(US_data_frame$temp,1)
+
+US_data_frame$lag[1] <-US_data_frame$lag[2]
+
+US_data_frame$diff <- US_data_frame$temp - US_data_frame$lag
+
+US_data_frame$per <- (US_data_frame$diff/US_data_frame$lag) * 100
+
+US_final_dataset<- US_data_frame[,c("year","temp","diff","per")]
+
+View(US_final_dataset)
+write.csv(US_final_dataset, "USdata.csv")
+
+#### Burundi 
+
+#Getting the data from main data
+Burundi_Data <- dplyr::filter(CountryData , Country =="Burundi")
+View(Burundi_Data)
+
+##checking the missing values
+colSums(is.na(Burundi_Data))
+
+#Checking whether the date class is changed or not
+str(Burundi_Data)
+
+#Removing the unwanted columns
+Burundi_Data <- subset( Burundi_Data, select = -c( AverageTemperatureUncertainty , Country) )
+
+#COnverting the dataframe to Ts object
+Burundi.ts <- ts(Burundi_Data[,"AverageTemperature"] , c(1768 , 9) , c(2013 , 9), 12)  
+
+#Checking whether the dataframe is converted to time series object
+class(Burundi.ts)
+
+##Spliting the data between Train and test in 80:20 format
+Burundi_Train <- window(Burundi.ts , c(1768 , 1) , c(2010,12 )  )
+
+Burundi_Test <- window(Burundi.ts , c(2010 , 1) , c(2013,9))  
+
+# Plotting the graph before interpolating the missing values 
+autoplot(Burundi.ts)
+
+#Doing the interpolation using Interpret function
+Burundi.ts <- na.interp(Burundi.ts)
+
+# Plotting the graph after interpolating the missing values
+autoplot(Burundi.ts) 
+
+## 1 .  visually inspecting the distribution of time series values with Kernal density estimate and normal density funtion to a plot
+gghistogram(Burundi_Train , add.normal=TRUE, add.kde=TRUE)
+
+## 2. Using the decompose function to break the series into seasonal, trend, and irregular components
+BurundiTrain_decomposed <- decompose(Burundi_Train)
+plot(BurundiTrain_decomposed)
+
+## 3.Checking the seasonality
+nsdiffs(Burundi_Train)
+ggseasonplot(Burundi_Train)
+ggseasonplot(Burundi_Train,polar=TRUE) 
+ggsubseriesplot(Burundi_Train)
+
+##  Exploring the Auto-Correlation 
+Acf(Burundi_Train)
+Pacf(Burundi_Train)
+
+##Modelling
+##Sarima
+diff12 = diff(Burundi_Train,12)
+plot(diff12)
+acf(diff12, 48)
+BurundiSarima <- sarima(Burundi_Train,1,0,0,2,1,1,12 )
+Burundinewfore <- sarima.f(Burundi_Train , 60, 1,0,0,2,1,1,12)
+
+Burundi_Sarima <- auto.arima(BurundiTrainData, test = "kpss" , trace = TRUE , ic = "bic") 
+confint(Burundi_Sarima)
+plot.ts(Burundi_Sarima$residuals)     
+Box.test(Burundi_Sarima$residuals , type = "Ljung-Box" , lag = 20)    
+
+Burundi.forecast1 <- forecast(BurundiTrainData , h = 60)
+plot(Burundi.forecast1 , xlab = "Years" , ylab = "Average Temperature")
+plot(Burundi.forecast1)
+plotarimapred(BurundiTestdata , Burundi_Sarima , xlim = c(2011,2013) , range.percent = 0.05)
+accuracy(Burundi.forecast1, BurundiTestdata)
+Burundi.forecastdf <- Burundi.forecast$mean
+
+##Getting the output
+BurundiDATA <-CountrySorteddata[CountrySorteddata$Country == "Burundi",]
+
+Burundi_country <- matrix(BurundiDATA$AverageTemperature,ncol = 12,byrow = T)
+Burundi_country
+Burundiavg_country <- data.frame(year = 1970:2010,temp = rowMeans(Burundi_country[-c(61:63),], na.rm = FALSE, dims = 1))
+
+Burundi_prediction <- matrix(as.matrix(Burundi.forecast1),ncol = 12,byrow = T)
+
+Burundiavg_predict_country <- data.frame(year = 2011:2015,temp = rowMeans(Burundi_prediction, na.rm = FALSE, dims = 1))
+
+Burundi_data_frame <- rbind(Burundiavg_country,Burundiavg_predict_country)
+View(Burundi_data_frame)
+Burundi_data_frame$lag<- Hmisc::Lag(Burundi_data_frame$temp,1)
+
+Burundi_data_frame$lag[1] <-Burundi_data_frame$lag[2]
+
+Burundi_data_frame$diff <- Burundi_data_frame$temp - Burundi_data_frame$lag
+
+US_data_frame$per <- (Burundi_data_frame$diff/Burundi_data_frame$lag) * 100
+
+Burundi_final_dataset<- Burundi_data_frame[,c("year","temp","diff","per")]
+
+View(Burundi_final_dataset)
+write.csv(Burundi_final_dataset, "Burundidata.csv")
+
+
+##3. Afghanisthan
+
+#Getting the data from main data
+Afghanistan_Data <- dplyr::filter(CountryData , Country =="Afghanistan")
+View(Afghanistan_Data)
+
+##checking the missing values
+colSums(is.na(Afghanistan_Data))
+
+#Checking whether the date class is changed or not
+str(Afghanistan_Data)
+
+#Removing the unwanted columns
+Afghanistan_Data <- subset( Afghanistan_Data, select = -c( AverageTemperatureUncertainty , Country) )
+
+#COnverting the dataframe to Ts object
+Afghanistan.ts <- ts(Afghanistan_Data[,"AverageTemperature"] , c(1800 , 9) , c(2013 , 9), 12)  
+autoplot(Afghanistan.ts)  
+
+#Checking whether the dataframe is converted to time series object
+class(Afghanistan.ts)
+
+##Spliting the data between Train and test
+Afghanistan_Train <- window(Afghanistan.ts , c(1800 , 9) , c(2010,12 )  )
+
+Afghanisan_Test <- window(Afghanistan.ts , c(2010 , 1) , c(2013,9))  
+
+# Plotting the graph before interpolating the missing values 
+autoplot(Afghanistan.ts)
+
+#Doing the interpolation using Interpret function
+Afghanistan.ts <- na.interp(Afghanistan.ts)
+
+# Plotting the graph after interpolating the missing values 
+autoplot(Afghanistan.ts)
+
+## 1 .  visually inspecting the distribution of time series values with Kernal density estimate and normal density funtion to a plot
+gghistogram(Afghanistan_Train , add.normal=TRUE, add.kde=TRUE)
+
+
+## 2. Using the decompose function to break the series into seasonal, trend, and irregular components
+Afghanistan_Train_decomposed <- decompose(Afghanistan_Train)
+plot(Afghanistan_Train_decomposed)
+
+## Afghanistan_Train the seasonality
+nsdiffs(Afghanistan_Train)
+ggseasonplot(Afghanistan_Train)
+ggseasonplot(Afghanistan_Train,polar=TRUE) 
+ggsubseriesplot(Afghanistan_Train)
+
+##  Exploring the Auto-Correlation 
+Acf(Afghanistan_Train)
+Pacf(Afghanistan_Train)
+
+##Modelling
+##Sarima
+AfghanisanSarima <- sarima(Afghanistan_Train , 2,0,2,0,1,1,12 )
+Afghanistannewfore <- sarima.f(Afghanistan_Train , 48, 2,0,2,0,1,1,12)
+##comparing the coeficients with this one
+Afghanistan_Sarima <- auto.arima(Afghanistan_Train, test = "kpss" , trace = TRUE , ic = "bic") 
+
+confint(Afghanistan_Sarima)
+plot.ts(Afghanistan_Sarima$residuals)     
+Box.test(Afghanistan_Sarima$residuals , type = "Ljung-Box" , lag = 20)    
+
+jarque.bera.test(Afghanistan_Sarima$residuals)  
+Afghanistan.forecast <- forecast(Afghanistan_Sarima , h = 48)
+plot(Afghanistan.forecast,Afghanisan_Test)
+plot(Afghanisan_Test)
+
+plotarimapred(Afghanisan_Test , Afghanistan_Sarima , xlim = c(2011,2013) , range.percent = 0.05)
+##Checking the test set and forecast set
+accuracy(Afghanistan.forecast, Afghanisan_Test)
+
+##Getting the output
+AfghanistanDATA <-CountrySorteddata[CountrySorteddata$Country == "Afghanistan",]
+
+Afghanistan_country <- matrix(AfghanistanDATA$AverageTemperature,ncol = 12,byrow = T)
+
+Afghanistanavg_country <- data.frame(year = 1970:2010,temp = rowMeans(Afghanistan_country[-c(61:63),], na.rm = FALSE, dims = 1))
+
+Afghanistan_prediction <- matrix(as.matrix(Afghanistan.forecast),ncol = 12,byrow = T)
+
+Afghanistanavg_predict_country <- data.frame(year = 2011:2015,temp = rowMeans(Afghanistan_prediction, na.rm = FALSE, dims = 1))
+
+Afghanistan_data_frame <- rbind(Afghanistanavg_country,Afghanistanavg_predict_country)
+
+Afghanistan_data_frame$lag<- Hmisc::Lag(Afghanistan_data_frame$temp,1)
+
+Afghanistan_data_frame$lag[1] <-Afghanistan_data_frame$lag[2]
+
+Afghanistan_data_frame$diff <- Afghanistan_data_frame$temp - Afghanistan_data_frame$lag
+
+Afghanistan_data_frame$per <- (Afghanistan_data_frame$diff/Afghanistan_data_frame$lag) * 100
+
+Afghanistan_final_dataset<- Afghanistan_data_frame[,c("year","temp","diff","per")]
+
+View(Afghanistan_final_dataset)
+write.csv(Afghanistan_final_dataset, "Afghanistandata.csv")
+
+
+#4.Qatar Sarima
+
+#Getting the data from main data
+Qatar_Data <- dplyr::filter(CountryData , Country =="Qatar")
+View(Qatar_Data)
+
+##checking the missing values
+colSums(is.na(Qatar_Data))
+
+#Checking whether the date class is changed or not
+str(Qatar_Data)
+
+#Removing the unwanted columns
+Qatar_Data <- subset( Qatar_Data, select = -c( AverageTemperatureUncertainty , Country) )
+
+#COnverting the dataframe to Ts object
+Qatar.ts <- ts(Qatar_Data[,"AverageTemperature"] , c(1800 , 9) , c(2013 , 9), 12)  
+autoplot(Qatar.ts)  
+
+#Checking whether the dataframe is converted to time series object
+class(Qatar.ts)
+
+
+##Spliting the data between Train and test in 80:20 format
+Qatar_Train <- window(Qatar.ts , c(1800 , 9) , c(2010,12 )  )
+
+Qatar_Test <- window(Qatar.ts , c(2010 , 1) , c(2013,9))  
+
+#Doing the interpolation using Interpret function
+Qatar.ts <- na.interp(Qatar.ts)
+
+
+# Plotting the graph before interpolating the missing values 
+ggplot(Qatar.ts, aes(dt, AverageTemperature)) +
+  geom_line() + scale_x_date('Year')  + ylab(" Average Temperature")
+
+
+## 1 .  visually inspecting the distribution of time series values with Kernal density estimate and normal density funtion to a plot
+gghistogram(Qatar_Train , add.normal=TRUE, add.kde=TRUE)
+
+## 2. Using the decompose function to break the series into seasonal, trend, and irregular components
+Qatar_Train_decomposed <- decompose(Qatar_Train)
+plot(Qatar_Train_decomposed)
+
+## Qatar_Train the seasonality
+nsdiffs(Qatar_Train)
+ggseasonplot(Qatar_Train)
+ggseasonplot(Qatar_Train,polar=TRUE) 
+ggsubseriesplot(Qatar_Train)
+
+##  Exploring the Auto-Correlation 
+Acf(Qatar_Train)
+Pacf(Qatar_Train)
+
+##Modelling
+##Sarima
+
+QatarSarima <- sarima(Qatar_Train,3,0,0,2,1,0,12 )
+Qatarnewfore <- sarima.for(Qatar_Train , 48, 3,0,0,2,1,0,12)
+
+##comparing the coeficients with this one and ACF and PACF PLOTS
+Qatar_Sarima <- auto.arima(Qatar_Train, test = "kpss" , trace = TRUE , ic = "bic") 
+
+#Residuals Diagnostics
+confint(Qatar_Sarima)
+plot.ts(Qatar_Sarima$residuals)     
+Box.test(Qatar_Sarima$residuals , type = "Ljung-Box" , lag = 20)    
+
+Qatar.forecast <- forecast(Qatar_Sarima , h = 48)
+
+plotarimapred(Qatar_Test , Qatar_Sarima , xlim = c(2011,2013) , range.percent = 0.05)
+##Checking the test set and forecast set
+accuracy(Qatar.forecast, Qatar_Test)
+
+##Getting the output
+QatarDATA <-CountrySorteddata[CountrySorteddata$Country == "Qatar",]
+
+Qatar_country <- matrix(QatarDATA$AverageTemperature,ncol = 12,byrow = T)
+
+Qataravg_country <- data.frame(year = 1970:2010,temp = rowMeans(Qatar_country[-c(61:63),], na.rm = FALSE, dims = 1))
+
+Qatar_prediction <- matrix(as.matrix(Qatar.forecast),ncol = 12,byrow = T)
+
+Qataravg_predict_country <- data.frame(year = 2011:2015,temp = rowMeans(Qatar_prediction, na.rm = FALSE, dims = 1))
+
+Qatar_data_frame <- rbind(Qataravg_country,Qataravg_predict_country)
+
+Qatar_data_frame$lag<- Hmisc::Lag(Qatar_data_frame$temp,1)
+
+Qatar_data_frame$lag[1] <-Qatar_data_frame$lag[2]
+
+Qatar_data_frame$diff <- Qatar_data_frame$temp - Qatar_data_frame$lag
+
+Qatar_data_frame$per <- (Qatar_data_frame$diff/Qatar_data_frame$lag) * 100
+
+Qatar_final_dataset<- Qatar_data_frame[,c("year","temp","diff","per")]
+
+View(Qatar_final_dataset)
+write.csv(Qatar_final_dataset, "Qatardata.csv")
+
+
+## IRELAND Sarima
+
+#Getting the data from main data
+Ireland_Data <- dplyr::filter(CountryData , Country =="Ireland")
+View(Ireland_Data)
+
+##checking the missing values
+colSums(is.na(Ireland_Data))
+
+#Checking whether the date class is changed or not
+str(Ireland_Data)
+
+#Removing the unwanted columns
+Ireland_Data <- subset( Ireland_Data, select = -c( AverageTemperatureUncertainty , Country) )
+
+#COnverting the dataframe to Ts object
+Ireland.ts <- ts(Ireland_Data[,"AverageTemperature"] , c(1800 , 9) , c(2013 , 9), 12)  
+autoplot(Ireland.ts)  
+
+#Checking whether the dataframe is converted to time series object
+class(Ireland.ts)
+
+##Spliting the data between Train and test in 80:20 format
+Ireland_Train <- window(Ireland.ts , c(1800 , 9) , c(2010,12 )  )
+
+Ireland_Test <- window(Ireland.ts , c(2010 , 1) , c(2013,9))  
+
+#Doing the interpolation using Interpret function
+Ireland.ts <- na.interp(Ireland.ts)
+
+# Plotting the graph after interpolating the missing values 
+autoplot(Ireland.ts)
+
+## 1 .  visually inspecting the distribution of time series values with Kernal density estimate and normal density funtion to a plot
+gghistogram(Ireland_Train , add.normal=TRUE, add.kde=TRUE)
+
+
+## 2. Using the decompose function to break the series into seasonal, trend, and irregular components
+Ireland_Train_decomposed <- decompose(Ireland_Train)
+plot(Ireland_Train_decomposed)
+
+## Ireland_Train the seasonality
+nsdiffs(Ireland_Train)
+ggseasonplot(Ireland_Train)
+ggseasonplot(Ireland_Train,polar=TRUE) 
+ggsubseriesplot(Ireland_Train)
+
+##  Exploring the Auto-Correlation 
+Acf(Ireland_Train)
+Pacf(Ireland_Train)
+
+##Modelling
+##Sarima
+IrelandSarima <- sarima(Ireland_Train,1,0,0,2,1,0,12 )
+Irelandnewfore <- sarima.f(Ireland_Train , 60, 1,0,0,2,1,0,12)
+##comparing the coeficients with this one and ACF and PACF PLOTS
+Ireland_Sarima <- auto.arima(Ireland_Train, test = "kpss" , trace = TRUE , ic = "bic") 
+#Residuals Diagnostics
+confint(Ireland_Sarima)
+plot.ts(Ireland_Sarima$residuals)     
+Box.test(Ireland_Sarima$residuals , type = "Ljung-Box" , lag = 20)    
+
+Ireland.forecast <- forecast(Ireland_Sarima , h = 60)
+
+plotarimapred(Ireland_Test , Ireland_Sarima , xlim = c(2011,2013) , range.percent = 0.05)
+##Checking the test set and forecast set
+accuracy(Ireland.forecast, Ireland_Test)
+
+##Getting the output
+IrelandDATA <-CountrySorteddata[CountrySorteddata$Country == "Ireland",]
+
+Ireland_country <- matrix(IrelandDATA$AverageTemperature,ncol = 12,byrow = T)
+
+Irelandavg_country <- data.frame(year = 1970:2010,temp = rowMeans(Ireland_country[-c(61:63),], na.rm = FALSE, dims = 1))
+
+Ireland_prediction <- matrix(as.matrix(Ireland.forecast),ncol = 12,byrow = T)
+
+Irelandavg_predict_country <- data.frame(year = 2011:2015,temp = rowMeans(Ireland_prediction, na.rm = FALSE, dims = 1))
+
+Ireland_data_frame <- rbind(Irelandavg_country,Irelandavg_predict_country)
+
+Ireland_data_frame$lag<- Hmisc::Lag(Ireland_data_frame$temp,1)
+
+Ireland_data_frame$lag[1] <-Ireland_data_frame$lag[2]
+
+Ireland_data_frame$diff <- Ireland_data_frame$temp - Ireland_data_frame$lag
+
+Ireland_data_frame$per <- (Ireland_data_frame$diff/Ireland_data_frame$lag) * 100
+
+Ireland_final_dataset<- Ireland_data_frame[,c("year","temp","diff","per")]
+
+View(Ireland_final_dataset)
+write.csv(Ireland_final_dataset, "Irelanddata.csv")
+
+
+#6. Zimbabwe
+
+#Getting the data from main data
+Zimb_Data <- dplyr::filter(CountryData , Country =="Zimbabwe")
+View(Zimb_Data)
+
+##checking the missing values
+colSums(is.na(Zimb_Data))
+
+#Checking whether the date class is changed or not
+str(Zimb_Data)
+
+#Removing the unwanted columns
+Zimb_Data <- subset( Zimb_Data, select = -c( AverageTemperatureUncertainty , Country) )
+
+#COnverting the dataframe to Ts object
+Zimb.ts <- ts(Zimb_Data[,"AverageTemperature"] , c(1800 , 9) , c(2013 , 9), 12)  
+autoplot(Zimb.ts)  
+
+#Checking whether the dataframe is converted to time series object
+class(Zimb.ts)
+
+##Spliting the data between Train and test
+Zimb_Train <- window(Zimb.ts , c(1800 , 9) , c(2010,12 )  )
+
+Zimb_Test <- window(Zimb.ts , c(2010 , 1) , c(2013,9))  
+
+#Doing the interpolation using Interpret function
+Zimb.ts <- na.interp(Zimb.ts)
+
+# Plotting the graph after interpolating the missing values 
+autoplot(Zimb.ts)
+
+## 1 .visually inspecting the distribution of time series values with Kernal density estimate and normal density funtion to a plot
+gghistogram(Zimb_Train , add.normal=TRUE, add.kde=TRUE)
+
+## 2. Using the decompose function to break the series into seasonal, trend, and irregular components
+Zimb_Train_decomposed <- decompose(Zimb_Train)
+plot(Zimb_Train_decomposed)
+
+## Sudan_Train the seasonality
+nsdiffs(Zimb_Train)
+ggseasonplot(Zimb_Train)
+ggseasonplot(Zimb_Train,polar=TRUE) 
+ggsubseriesplot(Zimb_Train)
+
+##  Exploring the Auto-Correlation 
+Acf(Zimb_Train)
+Pacf(Zimb_Train)
+
+##Modelling
+##Sarima
+
+ZimbSarima <- sarima(Zimb_Train,2,0,0,2,1,0,12 )
+Zimbnewfore <- sarima.f(Zimb_Train , 48, 2,1,0,1,0,1,12)
+##comparing the coeficients with this one and ACF and PACF PLOTS
+Zimb_Sarima <- auto.arima(Zimb_Train, test = "kpss" , trace = TRUE , ic = "bic") 
+
+#Residuals Diagnostics
+confint(Zimb_Sarima)
+plot.ts(Zimb_Sarima$residuals)     
+Box.test(Zimb_Sarima$residuals , type = "Ljung-Box" , lag = 20)    
+
+Zimb.forecast <- forecast(Zimb_Sarima , h = 48)
+
+plotarimapred(Zimb_Test , Zimb_Sarima , xlim = c(2011,2013) , range.percent = 0.05)
+##Checking the test set and forecast set
+accuracy(Zimb.forecast, Zimb_Test)
+
+##Getting the output
+ZimbDATA <-CountrySorteddata[CountrySorteddata$Country == "Zimbabwe",]
+
+Zimb_country <- matrix(ZimbDATA$AverageTemperature,ncol = 12,byrow = T)
+
+Zimbavg_country <- data.frame(year = 1970:2010,temp = rowMeans(Zimb_country[-c(61:63),], na.rm = FALSE, dims = 1))
+
+Zimb_prediction <- matrix(as.matrix(Zimb.forecast),ncol = 12,byrow = T)
+
+Zimbavg_predict_country <- data.frame(year = 2011:2015,temp = rowMeans(Zimb_prediction, na.rm = FALSE, dims = 1))
+
+Zimb_data_frame <- rbind(Zimbavg_country,Zimbavg_predict_country)
+
+Zimb_data_frame$lag<- Hmisc::Lag(Zimb_data_frame$temp,1)
+
+Zimb_data_frame$lag[1] <-Zimb_data_frame$lag[2]
+
+Zimb_data_frame$diff <- Zimb_data_frame$temp - Zimb_data_frame$lag
+
+Zimb_data_frame$per <- (Zimb_data_frame$diff/Zimb_data_frame$lag) * 100
+
+Zimb_final_dataset<- Zimb_data_frame[,c("year","temp","diff","per")]
+
+View(Zimb_final_dataset)
+write.csv(Zimb_final_dataset , "Zimbdata.csv")
+
+
+##Elman Networks
+# 1. United States
+#Creating the function
+range_data<- function(x){(x-min(x))/(max(x)- min( x ) ) }
+US <- range_data (United_States)
+min_data<-min( United_States )
+max_data<-max( United_States )
+max_data
+
+
+US <- as.zoo( US )
+x1<-Lag (US, k = 1)
+x2<-Lag (US, k = 2)
+x3<-Lag (US , k = 3)
+x4<-Lag (US , k = 4)
+x5<-Lag (US , k = 5)
+x6<-Lag (US, k = 6)
+x7<-Lag (US, k = 7)
+x8<-Lag (US, k = 8)
+x9<-Lag (US, k = 9)
+x10<-Lag (US , k = 10)
+x11<-Lag (US, k = 11)
+x12<-Lag (US, k = 12)
+x<-cbind ( x1 , x2 , x3 ,
+           x4 , x5 , x6 ,
+           x7 , x8 , x9 ,
+           x10 , x11 , x12 )
+x<-cbind (US , x )
+x<- x [ -(1:12) , ]
+n=nrow( x )
+n
+
+n_train <- 2600
+View(n_train)
+train <- sample(1:n,n_train,FALSE)
+inputs <- x[,2:13]
+outputs <- x[,1]
+
+#With 1000  iterations
+US_Elman  <- elman(inputs[train] ,
+            outputs[train],
+            size=c(2,2),
+            maxit=1000)
+#Iterative Plot
+plotIterativeError(US_Elman , main = "Iterative Error Plot over sample")
+#Regressive Plot
+plotRegressionError(outputs[train] ,US_Elman$fitted.values , main = "Relationship between actual values vs predicted values " , ylab = "Fitted normalized values" , xlab = "Target Values")
+#Fitting the values
+round( cor(outputs[train] ,US_Elman$fitted.values ) ^2 ,4)
+pred <-predict(US_Elman,inputs[-train])
+round(cor(outputs[-train],pred)^2,4)
+##Unscaling the function Data
+unscale_data<- function(x ,max_x,min_x)
+{x *(max_x-min_x)+min_x}
+
+
+output_actual<-unscale_data(outputs[-train] ,max_data , min_data )
+output_actual<-as.matrix(output_actual)
+rownames(output_actual)<- 1 :length(output_actual )
+output_pred<- unscale_data ( pred ,
+                             max_data ,
+                             min_data )
+result<- cbind(as.ts(output_actual) ,as.ts(output_pred))
+plot(result, xlim = c(2011,2013))
+MAPE(output_actual,output_pred) 
+
+
+###Starting with Afghanistan
+
+# 2. Afghanistan
+#Creating the function
+range_data<- function(x){(x-min(x))/(max(x)- min( x ) ) }
+##Loading the same data again which was used for sarima
+Afg <- range_data (Afghanistan.ts)
+min_data<-min( Afghanistan.ts )
+max_data<-max( Afghanistan.ts )
+max_data
+
+
+Afg <- as.zoo( Afg )
+x1<-Lag (Afg, k = 1)
+x2<-Lag (Afg, k = 2)
+x3<-Lag (Afg , k = 3)
+x4<-Lag (Afg , k = 4)
+x5<-Lag (Afg , k = 5)
+x6<-Lag (Afg, k = 6)
+x7<-Lag (Afg, k = 7)
+x8<-Lag (Afg, k = 8)
+x9<-Lag (Afg, k = 9)
+x10<-Lag (Afg , k = 10)
+x11<-Lag (Afg, k = 11)
+x12<-Lag (Afg, k = 12)
+x<-cbind ( x1 , x2 , x3 ,
+           x4 , x5 , x6 ,
+           x7 , x8 , x9 ,
+           x10 , x11 , x12 )
+x<-cbind (Afg , x )
+x<- x [ -(1:12) , ]
+n=nrow( x )
+n
+##Sampling the data
+n_train <- 2500
+View(n_train)
+train <- sample(1:n,n_train,FALSE)
+inputs <- x[,2:13]
+outputs <- x[,1]
+
+#With 1000 iterations
+Afg_Elman  <- elman(inputs[train] ,
+                   outputs[train],
+                   size=c(2,2),
+                   maxit=1000)
+#Iterative Plot
+plotIterativeError(Afg_Elman , main = "Iterative Error Plot over sample")
+#Regressive Plot
+plotRegressionError(outputs[train] ,Afg_Elman$fitted.values , main = "Relationship between actual values vs predicted values " , ylab = "Fitted normalized values" , xlab = "Target Values")
+#Fitting the values
+round( cor(outputs[train] ,Afg_Elman$fitted.values ) ^2 ,4)
+pred <-predict(Afg_Elman,inputs[-train])
+round(cor(outputs[-train],pred)^2,4)
+##Unscaling the function Data
+unscale_data<- function(x ,max_x,min_x)
+{x *(max_x-min_x)+min_x}
+
+##Unscaling the acutual data 
+output_actual<-unscale_data(outputs[-train] ,max_data , min_data )
+output_actual<-as.matrix(output_actual)
+rownames(output_actual)<- 1 :length(output_actual )
+##Predicting the data
+output_pred<- unscale_data ( pred ,
+                             max_data ,
+                             min_data )
+result<- cbind(as.ts(output_actual) ,as.ts(output_pred))
+plot(result, xlim = c(2011,2013))
+## Getting the Mape value
+MAPE(output_actual,output_pred) 
+
+## 3. Zimbabwe Elman
+
+#Creating the function
+range_data<- function(x){(x-min(x))/(max(x)- min( x ) ) }
+##Loading the same data again which was used for sarima
+Zimb <- range_data(Zimb.ts)
+min_data<-min( Zimb.ts )
+max_data<-max( Zimb.ts )
+min_data
+
+Zimb <- as.zoo( Zimb )
+x1<-Lag(Zimb,k=1)
+x2<-Lag (Zimb, k = 2)
+x3<-Lag (Zimb , k = 3)
+x4<-Lag (Zimb , k = 4)
+x5<-Lag (Zimb , k = 5)
+x6<-Lag (Zimb, k = 6)
+x7<-Lag (Zimb, k = 7)
+x8<-Lag (Zimb, k = 8)
+x9<-Lag (Zimb, k = 9)
+x10<-Lag (Zimb , k = 10)
+x11<-Lag (Zimb, k = 11)
+x12<-Lag (Zimb, k = 12)
+x<-cbind ( x1 , x2 , x3 ,
+           x4 , x5 , x6 ,
+           x7 , x8 , x9 ,
+           x10 , x11 , x12 )
+x<-cbind (Zimb , x )
+x <- x [ -(1:12) , ]
+View(x)
+n=nrow( x )
+n
+##Sampling the data
+n_train <- 2300
+View(n_train)
+train <- sample(1:n,n_train,FALSE)
+inputs <- x[,2:13]
+outputs <- x[,1]
+
+#With 1000 iterations
+Zimb_Elman  <- elman(inputs[train] ,
+                    outputs[train],
+                    size=c(2,2),
+                    maxit=1000)
+#Iterative Plot
+plotIterativeError(Zimb_Elman , main = "Iterative Error Plot over sample")
+#Regressive Plot
+plotRegressionError(outputs[train] ,Zimb_Elman$fitted.values , main = "Relationship between actual values vs predicted values " , ylab = "Fitted normalized values" , xlab = "Target Values")
+#Fitting the values
+round( cor(outputs[train] ,Zimb_Elman$fitted.values ) ^2 ,4)
+pred <-predict(Zimb_Elman,inputs[-train])
+round(cor(outputs[-train],pred)^2,4)
+##Unscaling the function Data
+unscale_data<- function(x ,max_x,min_x)
+{x *(max_x-min_x)+min_x}
+
+##Unscaling the acutual data 
+output_actual<-unscale_data(outputs[-train] ,max_data , min_data )
+output_actual<-as.matrix(output_actual)
+rownames(output_actual)<- 1 :length(output_actual )
+##Predicting the data
+output_pred<- unscale_data ( pred ,
+                             max_data ,
+                             min_data )
+result<- cbind(as.ts(output_actual) ,as.ts(output_pred))
+plot(result, xlim = c(2011,2013))
+## Getting the Mape value
+MAPE(output_actual,output_pred) 
+
+##4. Ireland Elman
+
+#Creating the function
+range_data<- function(x){(x-min(x))/(max(x)- min( x ) ) }
+##Loading the same data again which was used for sarima
+Ireland <- range_data (Ireland.ts)
+min_data<-min( Ireland.ts )
+max_data<-max( Ireland.ts )
+max_data
+
+Ireland <- as.zoo( Ireland )
+x1<-Lag (Ireland, k = 1)
+x2<-Lag (Ireland, k = 2)
+x3<-Lag (Ireland , k = 3)
+x4<-Lag (Ireland , k = 4)
+x5<-Lag (Ireland , k = 5)
+x6<-Lag (Ireland, k = 6)
+x7<-Lag (Ireland, k = 7)
+x8<-Lag (Ireland, k = 8)
+x9<-Lag (Ireland, k = 9)
+x10<-Lag (Ireland , k = 10)
+x11<-Lag (Ireland, k = 11)
+x12<-Lag (Ireland, k = 12)
+x<-cbind ( x1 , x2 , x3 ,
+           x4 , x5 , x6 ,
+           x7 , x8 , x9 ,
+           x10 , x11 , x12 )
+x<-cbind (Ireland , x )
+x<- x [ -(1:12) , ]
+n=nrow( x )
+n
+##Sampling the data
+n_train <- 2500
+View(n_train)
+train <- sample(1:n,n_train,FALSE)
+inputs <- x[,2:13]
+outputs <- x[,1]
+
+#With 1000 iterations
+Ireland_Elman  <- elman(inputs[train] ,
+                    outputs[train],
+                    size=c(2,2),
+                    maxit=1000)
+#Iterative Plot
+plotIterativeError(Ireland_Elman , main = "Iterative Error Plot over sample")
+#Regressive Plot
+plotRegressionError(outputs[train] ,Ireland_Elman$fitted.values , main = "Relationship between actual values vs predicted values " , ylab = "Fitted normalized values" , xlab = "Target Values")
+#Fitting the values
+round( cor(outputs[train] ,Ireland_Elman$fitted.values ) ^2 ,4)
+pred <-predict(Ireland_Elman,inputs[-train])
+round(cor(outputs[-train],pred)^2,4)
+##Unscaling the function Data
+unscale_data<- function(x ,max_x,min_x)
+{x *(max_x-min_x)+min_x}
+
+##Unscaling the acutual data 
+output_actual<-unscale_data(outputs[-train] ,max_data , min_data )
+output_actual<-as.matrix(output_actual)
+rownames(output_actual)<- 1 :length(output_actual )
+##Predicting the data
+output_pred<- unscale_data ( pred ,
+                             max_data ,
+                             min_data )
+result<- cbind(as.ts(output_actual) ,as.ts(output_pred))
+plot(result, xlim = c(2011,2013))
+## Getting the Mape value
+MAPE(output_actual,output_pred) 
+#### Completed Ireland
+
+##Starting with Qatar
+#5.Qatar
+#Creating the function
+range_data<- function(x){(x-min(x))/(max(x)- min( x ) ) }
+##Loading the same data again which was used for sarima
+Qatar <- range_data (Qatar.ts)
+min_data<-min( Qatar.ts )
+max_data<-max( Qatar.ts )
+max_data
+
+Qatar <- as.zoo( Qatar )
+x1<-Lag (Qatar, k = 1)
+x2<-Lag (Qatar, k = 2)
+x3<-Lag (Qatar , k = 3)
+x4<-Lag (Qatar , k = 4)
+x5<-Lag (Qatar , k = 5)
+x6<-Lag (Qatar, k = 6)
+x7<-Lag (Qatar, k = 7)
+x8<-Lag (Qatar, k = 8)
+x9<-Lag (Qatar, k = 9)
+x10<-Lag (Qatar , k = 10)
+x11<-Lag (Qatar, k = 11)
+x12<-Lag (Qatar, k = 12)
+x<-cbind ( x1 , x2 , x3 ,
+           x4 , x5 , x6 ,
+           x7 , x8 , x9 ,
+           x10 , x11 , x12 )
+x<-cbind (Qatar , x )
+x<- x [ -(1:12) , ]
+n=nrow( x )
+n
+##Sampling the data
+n_train <- 2500
+View(n_train)
+train <- sample(1:n,n_train,FALSE)
+inputs <- x[,2:13]
+outputs <- x[,1]
+
+#With 1000 iterations
+Qatar_Elman  <- elman(inputs[train] ,
+                      outputs[train],
+                      size=c(2,2),
+                      maxit=1000)
+#Iterative Plot
+plotIterativeError(Qatar_Elman , main = "Iterative Error Plot over sample")
+#Regressive Plot
+plotRegressionError(outputs[train] ,Qatar_Elman$fitted.values , main = "Relationship between actual values vs predicted values " , ylab = "Fitted normalized values" , xlab = "Target Values")
+#Fitting the values
+round( cor(outputs[train] ,Qatar_Elman$fitted.values ) ^2 ,4)
+pred <-predict(Qatar_Elman,inputs[-train])
+round(cor(outputs[-train],pred)^2,4)
+##Unscaling the function Data
+unscale_data<- function(x ,max_x,min_x)
+{x *(max_x-min_x)+min_x}
+
+##Unscaling the acutual data 
+output_actual<-unscale_data(outputs[-train] ,max_data , min_data )
+output_actual<-as.matrix(output_actual)
+rownames(output_actual)<- 1 :length(output_actual )
+##Predicting the data
+output_pred<- unscale_data ( pred ,
+                             max_data ,
+                             min_data )
+result<- cbind(as.ts(output_actual) ,as.ts(output_pred))
+plot(result, xlim = c(2011,2013))
+## Getting the Mape value
+MAPE(output_actual,output_pred) 
+
+
+#6. Burundi Elman
+#Creating the function
+range_data<- function(x){(x-min(x))/(max(x)- min( x ) ) }
+##Loading the same data again which was used for sarima
+Burundi <- range_data (Burundi.ts)
+min_data <-min( Burundi.ts )
+max_data<-max( Burundi.ts )
+max_data
+
+Burundi <- as.zoo( Burundi )
+x1<-Lag (Burundi, k = 1)
+x2<-Lag (Burundi, k = 2)
+x3<-Lag (Burundi , k = 3)
+x4<-Lag (Burundi , k = 4)
+x5<-Lag (Burundi , k = 5)
+x6<-Lag (Burundi, k = 6)
+x7<-Lag (Burundi, k = 7)
+x8<-Lag (Burundi, k = 8)
+x9<-Lag (Burundi, k = 9)
+x10<-Lag (Burundi , k = 10)
+x11<-Lag (Burundi, k = 11)
+x12<-Lag (Burundi, k = 12)
+x<-cbind ( x1 , x2 , x3 ,
+           x4 , x5 , x6 ,
+           x7 , x8 , x9 ,
+           x10 , x11 , x12 )
+x<-cbind (Burundi , x )
+x<- x [ -(1:12) , ]
+n=nrow( x )
+n
+##Sampling the data
+n_train <- 2500
+View(n_train)
+train <- sample(1:n,n_train,FALSE)
+inputs <- x[,2:13]
+outputs <- x[,1]
+
+#With 1000 iterations
+Burundi_Elman  <- elman(inputs[train] ,
+                      outputs[train],
+                      size=c(2,2),
+                      maxit=1000)
+#Iterative Plot
+plotIterativeError(Burundi_Elman , main = "Iterative Error Plot over sample")
+#Regressive Plot
+plotRegressionError(outputs[train] ,Burundi_Elman$fitted.values , main = "Relationship between actual values vs predicted values " , ylab = "Fitted normalized values" , xlab = "Target Values")
+#Fitting the values
+round( cor(outputs[train] ,Burundi_Elman$fitted.values ) ^2 ,4)
+pred <-predict(Burundi_Elman,inputs[-train])
+round(cor(outputs[-train],pred)^2,4)
+##Unscaling the function Data
+unscale_data<- function(x ,max_x,min_x)
+{x *(max_x-min_x)+min_x}
+
+##Unscaling the acutual data 
+output_actual<-unscale_data(outputs[-train] ,max_data , min_data )
+output_actual<-as.matrix(output_actual)
+rownames(output_actual)<- 1 :length(output_actual )
+##Predicting the data
+output_pred<- unscale_data ( pred ,
+                             max_data ,
+                             min_data )
+result<- cbind(as.ts(output_actual) ,as.ts(output_pred))
+plot(result, xlim = c(2011,2013))
+## Getting the Mape value
+MAPE(output_actual,output_pred) 
+
+
+##Starting the Seasonal Naive
+####################Seasonal Naive  Model #######################################
+##EDA already done above
+
+#1.Zimbabwe
+Zimbabwe.naive  <- snaive(Zimb_Train , 60)
+#Checking the summary
+summary(Zimbabwe.naive)
+#plotting the forecasted values
+autoplot(Zimbabwe.naive)
+#Residual Checking
+checkresiduals(Zimbabwe.naive)
+##Evaluation 
+accuracy(Zimbabwe.naive, Zimb_Test)
+#CrossValidation
+errors <- tsCV(Zimb_Train, forecastfunction = snaive, h = 20)
+mean(errors^2, na.rm = TRUE)
+
+#2.Burundi
+Burundi.naive  <- snaive((BurundiTrainData) , 60)
+#Checking the summary
+summary(Burundi.naive)
+#plotting the forecasted values
+autoplot(Burundi.naive)
+#Residual Checking
+checkresiduals(Burundi.naive)
+##Evaluation 
+accuracy(Burundi.naive, BurundiTestdata)
+#CrossValidation
+errors <- tsCV(BurundiTrainData, forecastfunction = snaive, h = 20)
+mean(errors^2, na.rm = TRUE) 
+
+#3.Afghanisthan
+Afghanisthan.naive  <- snaive(AfghanistanTrainData , 200)
+#Checking the summary
+summary(Afghanisthan.naive)
+#plotting the forecasted values
+plot(AfghanistanTrainData, main = "Average Temperature using Seasonal Naive" , xlab = "Year", ylab = "Average Temperature" )
+lines(Afghanisthan.naive$mean , col = "firebrick3")
+#Residual Checking
+checkresiduals(Afghanisthan.naive)
+##Evaluation 
+accuracy(Afghanisthan.naive, AfghanistanTestdata)
+#CrossValidation
+errors <- tsCV(AfghanistanTrainData, forecastfunction = snaive, h = 20)
+mean(errors^2, na.rm = TRUE)
+
+#4.United States 
+UnitedStates.naive  <- snaive(United_StatesTrain , 60)
+#Checking the summary
+summary(UnitedStates.naive)
+#plotting the forecasted values
+autoplot(UnitedStates.naive)
+#Residual Checking
+checkresiduals(UnitedStates.naive)
+##Evaluation 
+accuracy(UnitedStates.naive, United_StatesTest)
+#CrossValidation
+errors <- tsCV(United_StatesTrain, forecastfunction = snaive, h = 20)
+mean(errors^2, na.rm = TRUE)
+
+#5.Ireland
+Ireland.naive  <- snaive(Ireland_StatesTrain , 60)
+#Checking the summary
+summary(Ireland.naive)
+#plotting the forecasted values
+autoplot(Ireland.naive)
+#Residual Checking
+checkresiduals(Ireland.naive)
+##Evaluation 
+accuracy(Ireland.naive, Ireland_Test)
+#CrossValidation
+errors <- tsCV(Ireland_Train, forecastfunction = snaive, h = 20)
+mean(errors^2, na.rm = TRUE)
+
+#6.Qatar 
+
+Qatar.naive  <- snaive(Qatar_Train , 60)
+#Checking the summary
+summary(Qatar.naive)
+#plotting the forecasted values
+autoplot(Qatar.naive)
+#Residual Checking
+checkresiduals(Qatar.naive)
+##Evaluation 
+accuracy(Qatar.naive, Qatar_Test)
+#CrossValidation
+errors <- tsCV(Qatar_Train, forecastfunction = snaive, h = 20)
+mean(errors^2, na.rm = TRUE)
+
+##Completed Seasonal Naive ##############
+
+#Starting the Global Temeratures Model###
+
+GlobalData <- read.csv(file = "GlobalTemperatures.csv" , header = TRUE , sep = ",")
+
+gdate <- as.Date(GlobalData$Date,format="%Y-%m-%d") # Produces NA when format is not "%m/%d/%Y"
+fdate <- as.Date(GlobalData$Date,format="%m/%d/%Y") # Produces NA when format is not "%d.%m.%Y"
+gdate[is.na(gdate)] <- fdate[!is.na(fdate)] # Combine both while keeping their ranks
+GlobalData$Date <- gdate
+
+str(GlobalData)
+colSums(is.na(GlobalData))
+
+GlobalData$LandAverageTemperature <- na.interp(GlobalData$LandAverageTemperature)
+
+GlobalData.ts <- ts(GlobalData[,'LandAverageTemperature'] , c(1750,1) , c(2015,12) ,12) 
+
+GlobalTrainData <- window(GlobalData.ts , c(1750 , 1) , c(2010 ,12 ))
+
+GlobalTestdata <- window(GlobalData.ts , c(2011 , 1) , c(2015,12))
+
+plot(GlobalTrainData)
+globaldecom <- decompose(GlobalTrainData)
+plot(globaldecom)
+ggseasonplot(GlobalTrainData)
+Global_Sarima_full <- auto.arima(GlobalData.ts, test = "kpss" , trace = TRUE , ic = "bic")
+global_forecast <- forecast(Global_Sarima_full, h = 60)
+
+plot(global_forecast)
+plotarimapred(GlobalTestdata , Global_Sarima , xlim = c(2011,2015) , range.percent = 0.05)
+accuracy(global_forecast, GlobalTestdata)
+forecast_range <- global_forecast$mean
+forecast_rangedf <- as.data.frame(global_forecast$mean)
+View(forecast_rangedf)
+
+global_forecast.df <- global_forecast$mean
+View(global_forecast.df)
+global_forecast.df <- as.data.frame(global_forecast.df)
+write.csv(global_forecast.df , "Globalforecast.csv")
+
+range_data<- function(x){(x-min(x))/(max(x)- min( x ) ) }
+Globalrange <- range_data (GlobalTrainData)
+GlobalrangeTest <- range_data(GlobalTestdata)
+forecast_range <- range_data(forecast_range)
+plotarimapred(GlobalrangeTest ,  forecast_range , xlim = c(2011,2015) , range.percent = 0.05 )
+
+
+# GDP Data SORTING Process and Finding the Top countries on the basis of GDP Per capita 
+
+ZGDPData <- read.csv( file = "GDP per capita.csv" , header = TRUE , sep = "," ) 
+head(ZGDPData) 
+colSums(is.na(ZGDPData))
+
+
+#converting the data set from colums to rows
+ZGDPnewdata <- gather(ZGDPData , key = "YEAR" ,value = "GDP Per Capita" ,  X1960 : X2017 ) #gather(Quarter, Revenue, Qtr.1:Qtr.4)
+
+str(ZGDPnewdata)
+
+#removing the unwanted character from date column and converting it back to date class 
+ZGDPnewdata$YEAR <- gsub("\\X" , "" , ZGDPnewdata$YEAR )            
+
+#converting from factor to date , character and numeric
+ZGDPnewdata$YEAR <- as.Date(ZGDPnewdata$YEAR , "%Y")
+ZGDPnewdata$Country.Name <- as.character(ZGDPnewdata$Country.Name)
+ZGDPnewdata$Country.Code <- as.character(ZGDPnewdata$Country.Code)
+ZGDPnewdata$`GDP Per Capita` <- as.numeric(ZGDPnewdata$`GDP Per Capita`)
+
+#Removing unwanted objects
+remove(ZGDPfiltered)
+remove(ZGDPnewdata1)
+
+# Created a new dataframe and instead of imputing, just replaced the na values with 0 to keep the relevancy as it is.
+AQ1 <- ZGDPnewdata
+AQ1[is.na(AQ1 <- ZGDPnewdata)] <- 0
+AQ1
+
+#Sorting the top FIve and bottom five countries on the basis of GDP per capita
+library(data.table)
+ZSortdata <- data.table(AQ1, key="GDP Per Capita")
+ZSortdata1 <- ZSortdata[, tail(.SD, 5), by=ZSortdata$`GDP Per Capita` ]
+
+#Filtering the sorted data on the basis of year
+ZGDPFilterednewdata <-  ZSortdata1[ZSortdata1$YEAR >= "2015-11-29" & ZSortdata1$YEAR <= "2016-11-29"]
+
+########################Completed#########################
+
+### Now taking the top countries on the basis of CO2 per capita #####
+
+
+YCO2percapita <- read.csv( file = "co-emissions-per-capita.csv" , header = TRUE , sep = ",")
+str(YCO2percapita)  
+
+#changing the classes form factor, integer to date and character and numeric
+
+YCO2percapita$Entity <- as.character(YCO2percapita$Entity)
+YCO2percapita$Code <- as.character(YCO2percapita$Code)
+YCO2percapita$Year <- as.Date(YCO2percapita$Year , "%Y")
+YCO2percapita$Per.capita.CO?...emissions..Global.Carbon.Project..Gapminder..UN...tonnes.per.capita. <- as.numeric(YCO2percapita$Per.capita.CO?...emissions..Global.Carbon.Project..Gapminder..UN...tonnes.per.capita.)
+
+#again checking the classes with the help of string functions
+str(YCO2percapita)
+
+#Checking the missing values 
+colSums(is.na(YCO2percapita))
+
+
+
+#Filtering the 2016 data yearwise
+YCO2percapitafiltered_data <-  YCO2percapita_sorteddata1[YCO2percapita_sorteddata1$Year >= "2015" & YCO2percapita_sorteddata1$Year <= "2016"]
+
+#Sorting the top 2016 countries on the basis of Carbon dioxide emissions.
+YCO2percapita_sorteddata <- data.table(YCO2percapita , key = "Per.capita.CO?...emissions..Global.Carbon.Project..Gapminder..UN...tonnes.per.capita.")
+YCO2percapita_sorteddata1 <- YCO2percapita_sorteddata[, tail(.SD, 3), by = Per.capita.CO?...emissions..Global.Carbon.Project..Gapminder..UN...tonnes.per.capita.] 
+
+##COmpleted CO2 countries #######
